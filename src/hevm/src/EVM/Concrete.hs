@@ -43,6 +43,7 @@ data Whiff = Dull
            | FromKeccak ByteString
            | Var String
            | FromBytes Buffer
+           | FromStorage Whiff
            | InfixBinOp String Whiff Whiff
            | BinOp String Whiff Whiff
            | UnOp String Whiff
@@ -53,6 +54,7 @@ instance Show Whiff where
   show (FromKeccak bstr) = "FromKeccak " ++ show bstr
   show (Var x) = printf "<%s>" x
   show (FromBytes buf) = "FromBuffer " ++ show buf
+  show (FromStorage w) = "SREAD(" ++ show w ++ ")"
   show (InfixBinOp op a b) = printf "(%s %s %s)" (show a) op (show b)
   show (BinOp op a b) = printf "%s(%s, %s)" op (show a) (show b)
   show (UnOp op x) = op ++ "(" ++ (show x) ++ ")"
