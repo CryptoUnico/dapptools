@@ -7,7 +7,7 @@
 
 module EVM.Types where
 
-import Prelude hiding  (Word)
+import Prelude hiding  (Word, LT, GT)
 
 import Data.Aeson (FromJSON (..), (.:))
 
@@ -49,10 +49,23 @@ import qualified Text.Read
 -- Some stuff for "generic programming", needed to create Word512
 import Data.Data
 
+data Sniff
+  = Oops
+  | Slice Whiff Whiff Sniff
+  | FromWord Whiff
+  | Calldata
+
+instance Show Sniff where
+  show = \case
+    Oops -> "<symbolic buffer>"
+    Slice w w' s -> show s ++ "[" ++ show w ++ ".." ++ show w' ++ "]"
+    FromWord w -> "buf" ++ show w
+    Calldata -> "CALLDATA"
+
 
 data Buffer
-  = ConcreteBuffer ByteString
-  | SymbolicBuffer [SWord 8]
+  = ConcreteBuffer Sniff ByteString
+  | SymbolicBuffer Sniff [SWord 8]
 
 newtype W256 = W256 Word256
   deriving
@@ -76,28 +89,96 @@ instance Show SymWord where
       whiff -> show whiff
     Just w'  -> show w'
 
+data EthEnv
+   = Caller
+   | Callvalue
+   | Calldepth
+   | Origin
+   | Blockhash
+   | Blocknumber
+   | Difficulty
+   | Chainid
+   | Gaslimit
+   | Coinbase
+   | Timestamp
+   | This
+   | Nonce
+  deriving Eq
 
--- | This type can give insight into the provenance of a term
-data Whiff = Dull
-           | Val String
-           | FromKeccak ByteString
-           | Var String
-           | FromBytes SymWord Buffer
-           | FromStorage Whiff
-           | InfixBinOp String Whiff Whiff
-           | BinOp String Whiff Whiff
-           | UnOp String Whiff
+instance Show EthEnv where
+  show = \case
+    Caller -> "CALLER"
+    Callvalue -> "CALLVALUE"
+    Calldepth -> "CALLDEPTH"
+    Origin -> "ORIGIN"
+    Blockhash -> "BLOCKHASH"
+    Blocknumber -> "BLOCKNUMBER"
+    Difficulty -> "DIFFICULTY"
+    Chainid -> "CHAINID"
+    Gaslimit -> "GASLIMIT"
+    Coinbase -> "COINBASE"
+    Timestamp -> "TIMESTAMP"
+    This -> "THIS"
+    Nonce -> "NONCE"
+
+-- typed expressions
+data Whiff =
+  --booleans
+  Dull
+  | And  Whiff Whiff
+  | Or   Whiff Whiff
+  | Impl Whiff Whiff
+  | Eq   Whiff Whiff
+  | NEq  Whiff Whiff
+  | LT   Whiff Whiff
+  | SLT  Whiff Whiff
+  | SGT  Whiff Whiff
+  | LEQ  Whiff Whiff
+  | GEQ  Whiff Whiff
+  | GT   Whiff Whiff
+  | Add  Whiff Whiff
+  | Sub  Whiff Whiff
+  | Mul  Whiff Whiff
+  | Div  Whiff Whiff
+  | Mod  Whiff Whiff
+  | Neg  Whiff
+  | FromKeccak Whiff
+  | FromBuffer Whiff Buffer
+  | Literal W256
+  | IsZero Whiff
+  | Env Whiff
 
 instance Show Whiff where
-  show Dull = "<symbolic>"
-  show (Val s) = s
-  show (FromKeccak bstr) = "FromKeccak " ++ show bstr
-  show (Var x) = printf "<%s>" x
-  show (FromBytes index buf) = "FromBuffer " ++ (show index) ++ " " ++ show buf
-  show (FromStorage w) = "SREAD(" ++ show w ++ ")"
-  show (InfixBinOp op a b) = printf "(%s %s %s)" (show a) op (show b)
-  show (BinOp op a b) = printf "%s(%s, %s)" op (show a) (show b)
-  show (UnOp op x) = op ++ "(" ++ (show x) ++ ")"
+  show = \case
+    -- booleans
+    Dull -> "<symbolic>"
+    FromKeccak a -> "keccak(" ++ show a ++ ")"
+    FromBuffer at' w -> show w ++ "[" ++ show at' ++ "]"
+    IsZero w -> "isZero( " ++ show w ++ " )"
+    Or a b -> print2 "or" a b
+    Eq a b -> print2 "==" a b
+    LT a b -> print2 "<" a b
+    SLT a b-> print2 "s<" a b
+    SGT a b-> print2 "s>" a b
+    GT a b -> print2 ">" a b
+    LEQ a b -> print2 "<=" a b
+    GEQ a b -> print2 ">=" a b
+    And a b -> print2 "and" a b
+    NEq a b -> print2 "=/=" a b
+    Neg a -> "(not " <> show a <> ")"
+    Impl a b -> print2 "=>" a b
+  
+    -- integers
+    Add a b -> print2 "+" a b
+    Sub a b -> print2 "-" a b
+    Mul a b -> print2 "*" a b
+    Div a b -> print2 "/" a b
+    Mod a b -> print2 "%" a b
+--    Exp a b -> print2 "^" a b
+    Literal a -> show a
+    Env a -> show a
+   where
+     print2 sym a b = printf ("( %s" ++ sym ++ " %s )") (show a) (show b)
 
 newtype Addr = Addr { addressWord160 :: Word160 }
   deriving (Num, Integral, Real, Ord, Enum, Eq, Bits, Generic)
@@ -158,24 +239,24 @@ litBytes bs = fmap (toSized . literal) (BS.unpack bs)
 -- | A buffer is a list of bytes. For concrete execution, this is simply `ByteString`.
 -- In symbolic settings, it is a list of symbolic bitvectors of size 8.
 instance Show Buffer where
-  show (ConcreteBuffer b) = show $ ByteStringS b
-  show (SymbolicBuffer b) = show (length b) ++ " bytes"
+  show (ConcreteBuffer w b) = show w
+  show (SymbolicBuffer w b) = show w
 
 
-instance Semigroup Buffer where
-  ConcreteBuffer a <> ConcreteBuffer b = ConcreteBuffer (a <> b)
-  ConcreteBuffer a <> SymbolicBuffer b = SymbolicBuffer (litBytes a <> b)
-  SymbolicBuffer a <> ConcreteBuffer b = SymbolicBuffer (a <> litBytes b)
-  SymbolicBuffer a <> SymbolicBuffer b = SymbolicBuffer (a <> b)
+-- instance Semigroup Buffer where
+--   ConcreteBuffer _ a <> ConcreteBuffer b = ConcreteBuffer (a <> b)
+--   ConcreteBuffer _ a <> SymbolicBuffer b = SymbolicBuffer (litBytes a <> b)
+--   SymbolicBuffer _ a <> ConcreteBuffer b = SymbolicBuffer (a <> litBytes b)
+--   SymbolicBuffer _ a <> SymbolicBuffer b = SymbolicBuffer (a <> b)
 
-instance Monoid Buffer where
-  mempty = ConcreteBuffer mempty
+-- instance Monoid Buffer where
+--   mempty = ConcreteBuffer mempty
 
 instance EqSymbolic Buffer where
-  ConcreteBuffer a .== ConcreteBuffer b = literal (a == b)
-  ConcreteBuffer a .== SymbolicBuffer b = litBytes a .== b
-  SymbolicBuffer a .== ConcreteBuffer b = a .== litBytes b
-  SymbolicBuffer a .== SymbolicBuffer b = a .== b
+  ConcreteBuffer _ a .== ConcreteBuffer _ b = literal (a == b)
+  ConcreteBuffer _ a .== SymbolicBuffer _ b = litBytes a .== b
+  SymbolicBuffer _ a .== ConcreteBuffer _ b = a .== litBytes b
+  SymbolicBuffer _ a .== SymbolicBuffer _ b = a .== b
 
 
 instance Read W256 where

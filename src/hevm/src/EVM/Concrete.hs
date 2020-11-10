@@ -97,8 +97,8 @@ readBlobWord (C _ i) x =
 blobSize :: ByteString -> Word
 blobSize x = w256 (num (BS.length x))
 
-keccakBlob :: ByteString -> Word
-keccakBlob x = C (FromKeccak x) (keccak x)
+keccakBlob :: ByteString -> Whiff -> Word
+keccakBlob x w = C (FromKeccak w) (keccak x)
 
 
 instance Read Word where
