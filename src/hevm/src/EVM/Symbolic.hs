@@ -124,12 +124,6 @@ writeMemory' bs1 (C _ n) (C _ src) (C _ dst) bs0 =
   in
     a <> a' <> c <> b'
 
-readMemoryWord' :: Word -> [SWord 8] -> SymWord
-readMemoryWord' (C _ i) m = sw256 $ fromBytes $ truncpad 32 (drop (num i) m)
-
-readMemoryWord32' :: Word -> [SWord 8] -> SWord 32
-readMemoryWord32' (C _ i) m = fromBytes $ truncpad 4 (drop (num i) m)
-
 setMemoryWord' :: Word -> SymWord -> [SWord 8] -> [SWord 8]
 setMemoryWord' (C _ i) (S _ x) =
   writeMemory' (toBytes x) 32 0 (num i)
@@ -138,11 +132,6 @@ setMemoryByte' :: Word -> SWord 8 -> [SWord 8] -> [SWord 8]
 setMemoryByte' (C _ i) x =
   writeMemory' [x] 1 0 (num i)
 
-readSWord' :: Word -> [SWord 8] -> SymWord
-readSWord' (C _ i) x =
-  if i > num (length x)
-  then 0
-  else swordAt (num i) x
 
 
 select' :: (Ord b, Num b, SymVal b, Mergeable a) => [a] -> a -> SBV b -> a
@@ -176,55 +165,63 @@ len :: Buffer -> Int
 len (SymbolicBuffer _ bs) = length bs
 len (ConcreteBuffer _ bs) = BS.length bs
 
--- grab :: Int -> Buffer -> Buffer
--- grab n (SymbolicBuffer _ bs) = SymbolicBuffer $ take n bs
--- grab n (ConcreteBuffer _ bs) = ConcreteBuffer $ BS.take n bs
+grab :: Int -> Buffer -> Buffer
+grab n (SymbolicBuffer _ bs) = SymbolicBuffer Oops $ take n bs
+grab n (ConcreteBuffer _ bs) = ConcreteBuffer Oops $ BS.take n bs
 
--- ditch :: Int -> Buffer -> Buffer
--- ditch n (SymbolicBuffer _ bs) = SymbolicBuffer $ drop n bs
--- ditch n (ConcreteBuffer _ bs) = ConcreteBuffer $ BS.drop n bs
+ditch :: Int -> Buffer -> Buffer
+ditch n (SymbolicBuffer _ bs) = SymbolicBuffer Oops $ drop n bs
+ditch n (ConcreteBuffer _ bs) = ConcreteBuffer Oops $ BS.drop n bs
 
 readByteOrZero :: Int -> Buffer -> SWord 8
 readByteOrZero i (SymbolicBuffer _ bs) = readByteOrZero' i bs
 readByteOrZero i (ConcreteBuffer _ bs) = num $ Concrete.readByteOrZero i bs
 
 sliceWithZero :: Int -> Int -> Buffer -> Buffer
-sliceWithZero o s (SymbolicBuffer m) = SymbolicBuffer (sliceWithZero' o s m)
-sliceWithZero o s (ConcreteBuffer m) = ConcreteBuffer (Concrete.byteStringSliceWithDefaultZeroes o s m)
+sliceWithZero o s (SymbolicBuffer w m) = SymbolicBuffer w (sliceWithZero' o s m)
+sliceWithZero o s (ConcreteBuffer w m) = ConcreteBuffer w (Concrete.byteStringSliceWithDefaultZeroes o s m)
 
 writeMemory :: Buffer -> Word -> Word -> Word -> Buffer -> Buffer
-writeMemory (ConcreteBuffer bs1) n src dst (ConcreteBuffer bs0) =
-  ConcreteBuffer (Concrete.writeMemory bs1 n src dst bs0)
-writeMemory (ConcreteBuffer bs1) n src dst (SymbolicBuffer bs0) =
-  SymbolicBuffer (writeMemory' (litBytes bs1) n src dst bs0)
-writeMemory (SymbolicBuffer bs1) n src dst (ConcreteBuffer bs0) =
-  SymbolicBuffer (writeMemory' bs1 n src dst (litBytes bs0))
-writeMemory (SymbolicBuffer bs1) n src dst (SymbolicBuffer bs0) =
-  SymbolicBuffer (writeMemory' bs1 n src dst bs0)
+writeMemory (ConcreteBuffer w bs1) n src dst (ConcreteBuffer w2 bs0) =
+  ConcreteBuffer (Write w n src dst w2) (Concrete.writeMemory bs1 n src dst bs0)
+writeMemory (ConcreteBuffer w bs1) n src dst (SymbolicBuffer w2 bs0) =
+  SymbolicBuffer (Write w n src dst w2) (writeMemory' (litBytes bs1) n src dst bs0)
+writeMemory (SymbolicBuffer w bs1) n src dst (ConcreteBuffer w2 bs0) =
+  SymbolicBuffer (Write w n src dst w2) (writeMemory' bs1 n src dst (litBytes bs0))
+writeMemory (SymbolicBuffer w bs1) n src dst (SymbolicBuffer w2 bs0) =
+  SymbolicBuffer (Write w n src dst w2) (writeMemory' bs1 n src dst bs0)
+
 
 readMemoryWord :: Word -> Buffer -> SymWord
-readMemoryWord i (SymbolicBuffer m) = readMemoryWord' i m
-readMemoryWord i (ConcreteBuffer m) = litWord $ Concrete.readMemoryWord i m
+readMemoryWord (C wfrom i) buff@(SymbolicBuffer wbuff m) = S (FromBuffer wfrom buff) $ fromBytes $ truncpad 32 (drop (num i) m)
+-- TODO - propagate whiff
+readMemoryWord i (ConcreteBuffer _ m) = litWord $ Concrete.readMemoryWord i m
 
 readMemoryWord32 :: Word -> Buffer -> SWord 32
-readMemoryWord32 i (SymbolicBuffer m) = readMemoryWord32' i m
-readMemoryWord32 i (ConcreteBuffer m) = num $ Concrete.readMemoryWord32 i m
+readMemoryWord32 (C wfrom i) (SymbolicBuffer wbuff m) = fromBytes $ truncpad 4 (drop (num i) m)
+readMemoryWord32 i (ConcreteBuffer wbuff m) = num $ Concrete.readMemoryWord32 i m
 
 setMemoryWord :: Word -> SymWord -> Buffer -> Buffer
-setMemoryWord i x (SymbolicBuffer z) = SymbolicBuffer $ setMemoryWord' i x z
-setMemoryWord i x (ConcreteBuffer z) = case maybeLitWord x of
-  Just x' -> ConcreteBuffer $ Concrete.setMemoryWord i x' z
-  Nothing -> SymbolicBuffer $ setMemoryWord' i x (litBytes z)
+setMemoryWord i (S wword x) (SymbolicBuffer wbuff z) = SymbolicBuffer (WriteWord i wword wbuff) $ setMemoryWord' i (S wword x) z
+setMemoryWord i (S wword x) (ConcreteBuffer wbuff z) = case maybeLitWord (S wword x) of
+  Just x' -> ConcreteBuffer (WriteWord i wword wbuff) $ Concrete.setMemoryWord i x' z
+  Nothing -> SymbolicBuffer (WriteWord i wword wbuff) $ setMemoryWord' i (S wword x) (litBytes z)
 
 setMemoryByte :: Word -> SWord 8 -> Buffer -> Buffer
-setMemoryByte i x (SymbolicBuffer m) = SymbolicBuffer $ setMemoryByte' i x m
-setMemoryByte i x (ConcreteBuffer m) = case fromSized <$> unliteral x of
-  Nothing -> SymbolicBuffer $ setMemoryByte' i x (litBytes m)
-  Just x' -> ConcreteBuffer $ Concrete.setMemoryByte i x' m
+setMemoryByte i x (SymbolicBuffer wbuff m) = SymbolicBuffer Oops $ setMemoryByte' i x m
+setMemoryByte i x (ConcreteBuffer wbuff m) = case fromSized <$> unliteral x of
+  Nothing -> SymbolicBuffer Oops $ setMemoryByte' i x (litBytes m)
+  Just x' -> ConcreteBuffer Oops $ Concrete.setMemoryByte i x' m
+
+readSWord' :: Word -> [SWord 8] -> SymWord
+readSWord' (C _ i) x =
+  if i > num (length x)
+  then 0
+  else swordAt (num i) x
 
 readSWord :: Word -> Buffer -> SymWord
-readSWord i (SymbolicBuffer x) = readSWord' i x
-readSWord i (ConcreteBuffer x) = num $ Concrete.readMemoryWord i x
+readSWord i (SymbolicBuffer wbuff x) = readSWord' i x
+readSWord i (ConcreteBuffer wbuff x) = num $ Concrete.readMemoryWord i x
 
 -- | Custom instances for SymWord, many of which have direct
 -- analogues for concrete words defined in Concrete.hs
@@ -237,17 +234,17 @@ instance Num SymWord where
   (S a x) + (S b y) = S (Add a b) (x + y)
   (S a x) * (S b y) = S (Mul a b) (x * y)
   abs (S a x) = S Dull (abs x)
-  signum (S a x) = S (UnOp "signum" a) (signum x)
-  fromInteger x = S (Literal x) (fromInteger x)
-  negate (S a x) = S (Sub 0 a) (negate x)
+  signum (S a x) = S (Sgn a) (signum x)
+  fromInteger x = S (Literal (fromInteger x)) (fromInteger x)
+  negate (S a x) = S (Sub (Literal (fromInteger 0)) a) (negate x)
 
 instance Bits SymWord where
   (S a x) .&. (S b y) = S (And a b) (x .&. y)
   (S a x) .|. (S b y) = S (Or a b) (x .|. y)
 --  (S a x) `xor` (S b y) = S (InfixBinOp "xor" a b) (x `xor` y)
-  complement (S a x) = S (UnOp "~" a) (complement x)
-  shift (S a x) i = S (UnOp ("<<" ++ (show i) ++ " ") a ) (shift x i)
-  rotate (S a x) i = S (UnOp ("rotate " ++ (show i) ++ " ") a) (rotate x i)
+  complement (S a x) = S (Cmp a) (complement x)
+  shift (S a x) i = S (Sft a i) (shift x i)
+  rotate (S a x) i = S (Rot a i) (rotate x i)
   bitSize (S _ x) = bitSize x
   bitSizeMaybe (S _ x) = bitSizeMaybe x
   isSigned (S _ x) = isSigned x

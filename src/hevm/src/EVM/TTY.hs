@@ -648,7 +648,7 @@ initialUiVmStateForTest opts@UnitTestOptions{..} (theContractName, theTestName) 
             void (runUnitTest opts theTestName args)
           SymbolicTest _ -> do
             Stepper.evm $ modify symbolify
-            void (execSymTest opts theTestName (first SymbolicBuffer symArgs))
+            void (execSymTest opts theTestName (first (SymbolicBuffer Oops) symArgs))
   pure $ initUiVmState vm0 opts script
   where
     Just (test, types) = find (\(test',_) -> extractSig test' == theTestName) $ unitTestMethods testContract
@@ -891,9 +891,9 @@ updateUiVmState ui vm =
     address = view (state . contract) vm
     message =
       case view result vm of
-        Just (VMSuccess (ConcreteBuffer msg)) ->
+        Just (VMSuccess (ConcreteBuffer _ msg)) ->
           Just ("VMSuccess: " <> (show $ ByteStringS msg))
-        Just (VMSuccess (SymbolicBuffer msg)) ->
+        Just (VMSuccess (SymbolicBuffer _ msg)) ->
           Just ("VMSuccess: <symbolicbuffer> " <> (show msg))
         Just (VMFailure (Revert msg)) ->
           Just ("VMFailure: " <> (show . ByteStringS $ msg))
@@ -968,8 +968,8 @@ withHighlight False = withDefAttr dimAttr
 withHighlight True  = withDefAttr boldAttr
 
 prettyIfConcrete :: Buffer -> String
-prettyIfConcrete (SymbolicBuffer x) = show x
-prettyIfConcrete (ConcreteBuffer x) = prettyHex 40 x
+prettyIfConcrete (SymbolicBuffer _ x) = show x
+prettyIfConcrete (ConcreteBuffer _ x) = prettyHex 40 x
 
 drawTracePane :: UiVmState -> UiWidget
 drawTracePane s =

@@ -49,8 +49,13 @@ import qualified Text.Read
 -- Some stuff for "generic programming", needed to create Word512
 import Data.Data
 
+
+data Word = C Whiff W256 --maybe to remove completely in the future
+
 data Sniff
   = Oops
+  | Write Sniff Word Word Word Sniff
+  | WriteWord Word Whiff Sniff
   | Slice Whiff Whiff Sniff
   | FromWord Whiff
   | Calldata
@@ -72,8 +77,6 @@ newtype W256 = W256 Word256
     ( Num, Integral, Real, Ord, Enum, Eq
     , Bits, FiniteBits, Bounded, Generic
     )
-
-data Word = C Whiff W256 --maybe to remove completely in the future
 
 instance Show Word where
   show (C _ x) = show x
@@ -130,23 +133,30 @@ data Whiff =
   | Impl Whiff Whiff
   | Eq   Whiff Whiff
   | NEq  Whiff Whiff
-  | LT   Whiff Whiff
+  | LT   Whiff Whiff   -- <
   | SLT  Whiff Whiff
   | SGT  Whiff Whiff
   | LEQ  Whiff Whiff
   | GEQ  Whiff Whiff
-  | GT   Whiff Whiff
+  | GT   Whiff Whiff   -- >
   | Add  Whiff Whiff
   | Sub  Whiff Whiff
   | Mul  Whiff Whiff
   | Div  Whiff Whiff
   | Mod  Whiff Whiff
   | Neg  Whiff
+  | Sgn  Whiff          -- signum
+  | Cmp  Whiff          -- complement
+  | Sft  Whiff Int      -- shift left
+  | Rot  Whiff Int      -- rotate
   | FromKeccak Whiff
   | FromBuffer Whiff Buffer
+  | FromStorage Whiff
   | Literal W256
   | IsZero Whiff
-  | Env Whiff
+  | NonZero Whiff
+  | Envv Whiff
+  | Var String
 
 instance Show Whiff where
   show = \case
@@ -155,6 +165,7 @@ instance Show Whiff where
     FromKeccak a -> "keccak(" ++ show a ++ ")"
     FromBuffer at' w -> show w ++ "[" ++ show at' ++ "]"
     IsZero w -> "isZero( " ++ show w ++ " )"
+    NonZero w -> "nonZero( " ++ show w ++ " )"
     Or a b -> print2 "or" a b
     Eq a b -> print2 "==" a b
     LT a b -> print2 "<" a b
@@ -167,7 +178,7 @@ instance Show Whiff where
     NEq a b -> print2 "=/=" a b
     Neg a -> "(not " <> show a <> ")"
     Impl a b -> print2 "=>" a b
-  
+
     -- integers
     Add a b -> print2 "+" a b
     Sub a b -> print2 "-" a b
@@ -176,7 +187,13 @@ instance Show Whiff where
     Mod a b -> print2 "%" a b
 --    Exp a b -> print2 "^" a b
     Literal a -> show a
-    Env a -> show a
+    Envv a -> show a
+    Sgn a   -> "sgn(" ++ (show a) ++ ")"
+    Cmp a   -> "~" ++ (show a)
+    Sft a i -> print2 "<<" a (show i)
+    Rot a i -> "rot(" ++ (show a) ++ ", " ++ show i ++ ")"
+    FromStorage a -> "FromStorage " ++ (show a)
+    Var a -> show a
    where
      print2 sym a b = printf ("( %s" ++ sym ++ " %s )") (show a) (show b)
 
@@ -243,14 +260,14 @@ instance Show Buffer where
   show (SymbolicBuffer w b) = show w
 
 
--- instance Semigroup Buffer where
---   ConcreteBuffer _ a <> ConcreteBuffer b = ConcreteBuffer (a <> b)
---   ConcreteBuffer _ a <> SymbolicBuffer b = SymbolicBuffer (litBytes a <> b)
---   SymbolicBuffer _ a <> ConcreteBuffer b = SymbolicBuffer (a <> litBytes b)
---   SymbolicBuffer _ a <> SymbolicBuffer b = SymbolicBuffer (a <> b)
+instance Semigroup Buffer where
+  ConcreteBuffer _ a <> ConcreteBuffer _ b = ConcreteBuffer Oops (a <> b)
+  ConcreteBuffer _ a <> SymbolicBuffer _ b = SymbolicBuffer Oops (litBytes a <> b)
+  SymbolicBuffer _ a <> ConcreteBuffer _ b = SymbolicBuffer Oops (a <> litBytes b)
+  SymbolicBuffer _ a <> SymbolicBuffer _ b = SymbolicBuffer Oops (a <> b)
 
--- instance Monoid Buffer where
---   mempty = ConcreteBuffer mempty
+instance Monoid Buffer where
+  mempty = ConcreteBuffer Oops mempty
 
 instance EqSymbolic Buffer where
   ConcreteBuffer _ a .== ConcreteBuffer _ b = literal (a == b)

@@ -62,6 +62,7 @@ writeMemory bs1 (C _ n) (C _ src) (C _ dst) bs0 =
   in
     a <> a' <> c <> b'
 
+-- TODO - add whiff
 readMemoryWord :: Word -> ByteString -> Word
 readMemoryWord (C _ i) m =
   let
